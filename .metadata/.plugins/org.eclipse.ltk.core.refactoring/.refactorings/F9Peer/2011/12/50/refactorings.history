@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<session version="1.0">
+<refactoring comment="Copy element &apos;PermutationGen.java&apos; to &apos;EzMatch/il.ac.openu.eyalzo.sim3&apos;&#x0A;- Original project: &apos;F9Peer&apos;&#x0A;- Destination element: &apos;EzMatch/il.ac.openu.eyalzo.sim3&apos;&#x0A;- Original element: &apos;logic.PermutationGen.java&apos;" description="Copy compilation unit" destination="=EzMatch/&lt;il.ac.openu.eyalzo.sim3" element1="/src&lt;logic{PermutationGen.java" files="0" flags="589830" folders="0" id="org.eclipse.jdt.ui.copy" policy="org.eclipse.jdt.ui.copyResources" stamp="1323533924047" units="1" version="1.0"/>
+</session>

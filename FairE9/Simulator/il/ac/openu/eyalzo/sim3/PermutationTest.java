@@ -1,5 +1,5 @@
 package il.ac.openu.eyalzo.sim3;
-/*
+
 import org.junit.Test;
 
 public class PermutationTest
@@ -10,9 +10,9 @@ public class PermutationTest
 		//
 		// All options for X pieces
 		//
-		runTest(3);
+		//runTest(3);
 		runTest(4);
-		runTest(8);
+		//runTest(8);
 	}
 
 	private void runTest(int piecesNum)
@@ -27,4 +27,3 @@ public class PermutationTest
 		}
 	}
 }
-*/

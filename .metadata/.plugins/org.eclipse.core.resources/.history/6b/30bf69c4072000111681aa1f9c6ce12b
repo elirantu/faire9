@@ -1,0 +1,36 @@
+class AttachmentsController < ApplicationController
+  include Databasedotcom::Rails::Controller
+  #before_filter :load_account, :except => [:index, :new]
+  
+  def index
+    parentid = Account.find_by_name('Brea Bil AB').Id
+    
+    @attachment = Attachment.find_by_parentid(parentid)
+    
+    contents = IO.read(path_to_binary_file)
+    Rails.logger.info contents
+
+
+    #newattachment = Attachment.new
+    
+    
+  end
+  
+end
+#IsDeleted : false
+#ParentId : 0012000000oCVgOAAW
+#Parent :
+#Name : contract.pdf
+#IsPrivate : false
+#ContentType : application/pdf
+#BodyLength : 1861860
+#Body : /services/data/v22.0/sobjects/Attachment/00P2000000CipxkEAB/Body
+#OwnerId : 005200000029s7AAAQ
+#Owner :
+#CreatedDate : 2011-12-04T17:09:43+00:00
+#CreatedById : 005200000029s7AAAQ
+#CreatedBy :
+#LastModifiedDate : 2011-12-04T17:09:43+00:00
+#LastModifiedById : 005200000029s7AAAQ
+#LastModifiedBy :
+#SystemModstamp : 2011-12-04T17:09:43+00:00

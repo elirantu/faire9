@@ -1,0 +1,798 @@
+require 'spec_helper'
+
+# Generating random organization number, so that when creating objects in Salesforce,
+# we will not violate the organization number uniqueness, when running tests from several different machines.
+# Using a copied code from the checksum_validator file.
+def _generate_random_organization_number
+  nine_digits = rand(10 ** 9)
+  if nine_digits < 100000000
+    nine_digits *= 10
+  end
+  
+  (0..9).each do |tenth_digit|
+    value = nine_digits * 10 + tenth_digit
+    number = value.to_s
+    # Calculate checksum
+    number.reverse!
+    relative_number = { '0' => 0, '1' => 2, '2' => 4, '3' => 6, '4' => 8, 
+                        '5' => 1, '6' => 3, '7' => 5, '8' => 7, '9' => 9}
+    sum = 0
+    number.split("").each_with_index do |n, i|
+      sum += (i % 2 == 0) ? n.to_i : relative_number[n]
+    end
+    return nine_digits * 10 + tenth_digit if sum % 10 == 0
+  end
+end
+
+describe Merchant do
+  before(:each) do
+    @partner                       = Factory(:partner)
+    @attr                          = {
+      :partner_id                  => @partner.id,
+      :industry_main_category      => "Leisure, Sport & Hobby",
+      :industry_sub_category       => "Costumes & Party supplies",
+      :website                     => "http://www.merchant.com",
+      :email                       => "merchant@example.com",
+      :phone                       => "+46123456789",
+      :single_transaction_estimate => 500,
+      :yearly_turnover_estimate    => 500000,
+      :partner_id                  => nil,
+      :setup_fees                  => nil,
+      :maintenance_fees            => nil,
+      :campaign_setup_fees         => nil,
+      :campaign_maintenance_fees   => nil,
+      :wants_invoice               => nil,
+      :wants_account               => nil,
+      :wants_campaign              => nil,
+      :company_name                => "Company Name",
+      :organization_number         => 6578432152,
+      :bank_type                   => "Bankkonto",
+      :bank_account_number         => "123456789",
+      :iban_number                 => nil
+    }
+  end
+  
+  def _prepare_complete_merchant
+    complete_merchant = @partner.merchants.build(@attr.merge(:organization_number => _generate_random_organization_number))
+    complete_merchant.company_address = Factory(:address, :country => "Sweden", :merchant => @merchant)
+    complete_merchant.persons << Factory(:person, :merchant => @merchant)
+    return complete_merchant
+  end
+
+  def _prepare_incomplete_merchant
+    incomplete_merchant = @partner.merchants.build(@attr.merge(:organization_number => _generate_random_organization_number))
+    return incomplete_merchant
+  end
+
+  it "should create a new instance given valid attributes" do
+    @partner.merchants.create!(@attr)
+  end
+
+  it "should have the partner's current offered fees" do
+    merchant = @partner.merchants.create(@attr)
+    merchant.reload # makes sure the fees are not just cached, but really saved
+    merchant.setup_fees.should == @partner.setup_fees
+    merchant.maintenance_fees.should == @partner.maintenance_fees
+    merchant.campaign_setup_fees.should == @partner.campaign_setup_fees
+    merchant.campaign_maintenance_fees.should == @partner.campaign_maintenance_fees
+    merchant.invoicing_fees.should == @partner.invoicing_fees
+    merchant.factoring_fees.should == @partner.factoring_fees
+    merchant.payment_delay.should == @partner.payment_delay
+    merchant.credit_time.should == @partner.credit_time
+  end
+  
+  describe "signup data completing" do
+    before(:each) do
+      @merchant = @partner.merchants.new(@attr)
+      @merchant.company_address = Factory(:address, :merchant => @merchant)
+      @merchant.persons << Factory(:person, :merchant => @merchant)
+    end
+    
+    it "should recognize a complete signup" do
+      @merchant.should be_signup_data_complete
+    end
+    
+    it "should recognize incomplete signup lacking bank type" do
+      @merchant[:bank_type] = nil
+      @merchant.should_not be_signup_data_complete
+    end
+    
+    it "should recognize incomplete signup data lacking organization number" do
+      @merchant[:organization_number] = nil
+      @merchant.should_not be_signup_data_complete
+    end
+    
+    it "should recognize incomplete signup data lacking other parameters" do
+      merchant = @partner.merchants.new(@attr.merge(:company_address => nil, :bank_account_number => nil))
+      merchant.should_not be_signup_data_complete
+    end
+  end
+  
+  describe "Validations" do
+  describe "industry validations" do
+    
+    it "should reject empty main industry category" do
+      invalid_merchant = Merchant.new(@attr.merge(:industry_main_category => nil))
+      invalid_merchant.should_not be_valid
+    end
+    
+    it "should reject invalid main category" do
+      merchant = Merchant.new(@attr.merge(:industry_main_category => "Invalid"))
+      merchant.should_not be_valid
+    end
+    
+    it "should reject invalid sub category" do
+      merchant = Merchant.new(@attr.merge(:industry_sub_category => "Invalid"))
+      merchant.should_not be_valid
+    end
+    
+    it "should reject unmatchin main-sub categories" do
+      main = Merchant::MAIN_INDUSTRIES[100]
+      sub = Merchant::SUB_INDUSTRIES["201"]
+      merchant = @partner.merchants.new(@attr.merge(:industry_main_category => main, 
+                                          :industry_sub_category => sub))
+      merchant.should_not be_valid
+    end 
+    
+    it "should accept 'other' industry_number" do
+      merchant = @partner.merchants.new(@attr.merge(:industry_main_category => nil, 
+                                          :industry_sub_category => nil,
+                                          :industry_number => "Other"))
+      merchant.should be_valid
+      merchant.industry_main_category.should == "Other"
+      merchant.industry_sub_category.should be_nil
+    end
+    
+    it "should convert industry_number to the correct main/sub categories" do
+      merchant = @partner.merchants.new(@attr.merge(:industry_main_category => nil, 
+                                          :industry_sub_category => nil,
+                                          :industry_number => "201"))
+      merchant.should be_valid
+      merchant.industry_main_category.should == Merchant::MAIN_INDUSTRIES[200]
+      merchant.industry_sub_category.should == Merchant::SUB_INDUSTRIES["201"]
+    end
+
+    it "should raise OnboardingException for invalid argument"
+  end
+  
+  describe "transactions estimations validations" do
+    
+    it "should reject a non-positive transaction estimate" do
+      merchant = @partner.merchants.new(@attr.merge(:single_transaction_estimate => 0))
+      merchant.should_not be_valid
+      merchant = @partner.merchants.new(@attr.merge(:single_transaction_estimate => -10))
+      merchant.should_not be_valid
+    end
+      
+    it "should reject a non-positive yearly turnover estimate" do
+      merchant = @partner.merchants.new(@attr.merge(:yearly_turnover_estimate => 0))
+      merchant.should_not be_valid
+      merchant = @partner.merchants.new(@attr.merge(:yearly_turnover_estimate => -10))
+      merchant.should_not be_valid
+    end
+    
+    it "should reject a yearly turnover smaller than signle transaction estimate" do
+      merchant = @partner.merchants.new(@attr.merge(:single_transaction_estimate => 50,
+                                          :yearly_turnover_estimate => 49))
+      merchant.should_not be_valid
+    end
+    
+    it "should reject a nil estimation" do
+      merchant = @partner.merchants.new(@attr.merge(:yearly_turnover_estimate => nil))
+      merchant.should_not be_valid
+      merchant = @partner.merchants.new(@attr.merge(:single_transaction_estimate => nil))
+      merchant.should_not be_valid
+    end
+  end
+  
+  describe "partner id validations" do
+    
+    it "should reject empty partner_id" do
+      empty_partnerid_merchant = @partner.merchants.new(@attr)
+      empty_partnerid_merchant.partner_id = nil
+      empty_partnerid_merchant.should_not be_valid
+    end
+      
+    it "should reject invalid partner_id" do
+      invalid_partnerid_merchant = @partner.merchants.new(@attr.merge(:partner_id => 987654321))
+      invalid_partnerid_merchant.should_not be_valid
+    end
+  end
+  
+  describe "phone number validations" do
+    it "should accept valid phone numbers" do
+      ["080983-90809", "  +89 98900--- -98", "+123-  33 "].each do |num|
+        valid_phone_number_merchant = @partner.merchants.new(@attr.merge(:phone => num))
+        valid_phone_number_merchant.should be_valid
+      end
+    end
+    
+    it "should accept nil phone number" do
+      nil_phone_merchant = @partner.merchants.new(@attr.merge(:phone => nil))
+      nil_phone_merchant.should be_valid
+    end
+    
+    it "should accept empty phone number" do
+      empty_phone_merchant = @partner.merchants.new(@attr.merge(:phone => ""))
+      empty_phone_merchant.should be_valid
+    end
+      
+    it "should reject invalid phone numbers" do
+      ["098A987", "+43a-434-2332", "324 24  2 #", "+123+123"].each do |num|
+        invalid_phone_merchant = @partner.merchants.new(@attr.merge(:phone => num))
+        invalid_phone_merchant.should_not be_valid
+      end
+    end
+  end
+  
+  describe "email validations" do
+    
+    it "shuold reject empty email" do
+      empty_email_merchant = @partner.merchants.new(@attr.merge(:email => ""))
+      empty_email_merchant.should_not be_valid
+    end
+
+    it "should accept valid email addresses" do
+      addresses                      = %w[user@foo.com THE_USER@foo.bar.org first.last@foo.jp]
+      addresses.each do |address|
+        valid_email_merchant         = @partner.merchants.new(@attr.merge(:email => address))
+        valid_email_merchant.should be_valid
+      end
+    end
+
+    it "should reject invalid email addresses" do
+      addresses = %w[user@foo,com user_at_foo.org example.user@foo.]
+      addresses.each do |address|
+        invalid_email_merchant = @partner.merchants.new(@attr.merge(:email => address))
+        invalid_email_merchant.should_not be_valid
+      end
+    end
+  end
+  
+  describe "organizational number validations" do
+    VALID_ORG_NUMS = %w[83556737-0431 5567370431 556737-0431 556---737-0431-- 556737-0431]
+    INVALID_ORG_NUMS = [1234567890, 10, 12345678901234]
+    it "should accept valid orgnization numbers" do
+      VALID_ORG_NUMS.each do |org_num|
+        merchant = @partner.merchants.new(@attr.merge(:organization_number => org_num))
+        merchant.should be_valid
+      end
+    end
+    
+    it "should accept nil organization number" do
+      merchant = @partner.merchants.new(@attr.merge(:organization_number => nil))
+      merchant.should be_valid
+    end
+      
+    it "should reject invalid organization number" do
+      INVALID_ORG_NUMS.each do |org_num|
+        merchant = @partner.merchants.new(@attr.merge(:organization_number => org_num))
+        merchant.should_not be_valid
+      end
+    end
+  end
+  
+  describe "website url validations" do
+    it "should accept different valid urls" do
+      urls = %w[http://www.klarna.com https://klarna.com www.klarna.com klarna.com]
+      urls.each do |url|
+        merchant = @partner.merchants.new(@attr.merge(:website => url))
+        merchant.should be_valid
+      end
+    end
+      
+    it "should accept nil urls" do
+      merchant = @partner.merchants.new(@attr.merge(:website => nil))
+      merchant.should be_valid
+    end
+    
+    #remove until Yair fixes the validation on the client side
+    it "should reject malformed urls"# do
+    #  malformed_urls = %w[htt://klarna.com http://www klarna]
+    #  malformed_urls.each do |url|
+    #    merchant = @partner.merchants.new(@attr.merge(:website => url))
+    #    merchant.should_not be_valid
+    #  end
+    #end
+  end
+  
+ 	describe "bank accounts validations" do
+		describe "Rejections" do
+			it "should reject invalid bak type" do
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'invalid_bank', :bank_account_number => 12345678))
+					merchant.should_not be_valid
+			end
+      it "should reject invalid bankgiro account numbers" do # 7-8 digits
+				bank_numbers = [123456, 123456789]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'bankgiro', :bank_account_number => bank_number))
+					merchant.should_not be_valid
+				end
+			end      
+			it "should reject invalid plusgiro account numbers" do  # 4-9 digits
+				bank_numbers = [123, 1234567890]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'plusgiro', :bank_account_number => bank_number))
+					merchant.should_not be_valid
+				end
+			end
+			
+			it "should reject invalid bankkonto account numbers" do  # 8-15 digits
+				bank_numbers = [1234567, 1234567890123456]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'bankkonto', :bank_account_number => bank_number))
+					merchant.should_not be_valid
+				end
+			end
+			
+			it "should reject invalid iban account numbers" do
+        	merchant = @partner.merchants.new(@attr.merge(:bank_type => 'iban', :iban_number => '23456789012345678901234'))
+					merchant.should_not be_valid
+      end			
+		end
+    describe "Acceptence" do
+			it "should accept valid bak type" do
+        	bank_types = ['bankgiro','plusgiro', 'bankkonto']
+          bank_types.each do |bank_type|
+            merchant = @partner.merchants.new(@attr.merge(:bank_type => bank_type, :bank_account_number => 12345678))
+  					merchant.should be_valid
+          end
+      end
+
+      it "should accept valid bankgiro account numbers" do # 7-8 digits
+				bank_numbers = [1234567, 12345678]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'bankgiro', :bank_account_number => bank_number))
+					merchant.should be_valid
+				end
+			end      
+			it "should accept valid plusgiro account numbers" do  # 4-9 digits
+				bank_numbers = [1234, 123456789]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'plusgiro', :bank_account_number => bank_number))
+          merchant.should be_valid
+				end
+			end
+			
+			it "should accept valid bankkonto account numbers" do  # 8-15 digits
+				bank_numbers = [12345678, 123456789012345]
+				bank_numbers.each do |bank_number|
+					merchant = @partner.merchants.new(@attr.merge(:bank_type => 'bankkonto', :bank_account_number => bank_number))
+					merchant.should be_valid
+				end
+			end
+			it "should accept valid iban account numbers" do
+        	merchant = @partner.merchants.new(@attr.merge(:bank_type => 'iban', :iban_number => '123456789012345678901234'))
+					merchant.should be_valid
+      end	
+		end
+  end
+  end
+ 
+  describe "associations" do
+
+    before(:each) do
+      @merchant = @partner.merchants.create(@attr)
+    end
+
+    describe "partner associations" do
+
+      it "should have a partner attribute" do
+        @merchant.should respond_to(:partner)
+      end
+
+      it "shuold have the right associated partner" do
+        @merchant.partner_id.should == @partner.id
+        @merchant.partner.should == @partner
+      end
+    end
+
+    describe "address associations" do
+
+      it "should have an address attribute" do
+        @merchant.should respond_to(:company_address)
+        @merchant.should respond_to(:invoice_address)
+      end
+
+      it "should have the invoice address same as company address, if invoice not specified" do
+        @company_address           = Factory(:address, :merchant => @merchant)
+        @merchant.reload
+        @merchant.company_address.should == @company_address
+        @merchant.invoice_address.should == @company_address
+      end
+
+      describe "two addresses types" do
+
+        before(:each) do
+          @invoice_address = Factory(:address, :address_type => "invoice", :merchant => @merchant)
+          @company_address = Factory(:address, :address_type => "company", :merchant => @merchant)
+          @merchant.reload
+        end
+
+        it "should have the right associated company address" do
+          @merchant.company_address.should == @company_address
+        end
+        
+        it "should have the right associated invoice address" do
+          @merchant.invoice_address.should == @invoice_address
+        end
+        
+        it "should assign the appropriate address type" do
+          @company_address.address_type.should == "company"
+          @invoice_address.address_type.should == "invoice"
+        end
+        
+        it "should have the invoice address same as company address, if invoice address deleted" do
+          @merchant.invoice_address.should == @invoice_address
+          @merchant.invoice_address.destroy
+          # Use 'true' to discard the cached invoice_address
+          @merchant.invoice_address(true).should == @company_address
+        end
+
+        it "should destroy associated addresses" do
+          @merchant.destroy
+          [@company_address, @invoice_address].each do |address|
+            Address.find_by_id(address.id).should be_nil
+          end
+        end
+      end
+    end
+    
+    describe "persons associations" do
+
+      before(:each) do
+        @persons = []
+        for i in [0..5]
+          @persons << Factory(:person, :merchant => @merchant)
+        end
+      end
+
+      it "should have persons attribute" do
+        @merchant.should respond_to(:persons)
+      end
+
+      it "should have the right associated persons" do
+        @merchant.persons.size.should == @persons.size
+        @persons.each do |person|
+          @merchant.persons.member?(person).should be_true
+        end
+      end
+
+      it "should destroy associated persons if merchant is destroyed" do
+        @merchant.destroy
+        @persons.each do |person|
+          Person.find_by_id(person.id).should be_nil
+        end
+      end
+    end
+  end
+
+  describe "multi-step form logic in the model" do
+    before(:each) do
+      @merchant = Merchant.new
+    end
+    
+    it "should respond to releven steps methods" do
+      @merchant .should respond_to(:current_step)
+      @merchant .should respond_to(:next_step)
+      @merchant .should respond_to(:last_step?)
+    end
+    
+    it "should return the first step, when no step is assigned to the merchant" do
+      @merchant.current_step.should == 'new'
+    end
+    
+    it "should ignore invalid step value that is assigned to the merchant" do
+      @merchant.current_step = 'invalid_step'
+      @merchant.current_step.should == 'new'
+    end
+
+    it "should return the correct step, when a step value is assigned to the merchant" do
+      @merchant.current_step = 'choose_plan'
+      @merchant.current_step.should == 'choose_plan'
+    end
+
+    it "should return the next step" do
+      @merchant.next_step.should == 'choose_plan'
+      @merchant.next_step.should == 'finish'
+    end
+
+    it "should return the correct boolean value for method las_step?" do
+      @merchant.last_step?.should == false
+      @merchant.current_step = 'finish'
+      @merchant.last_step?.should == true
+    end
+  end
+
+  describe "delayed jobs callback" do
+    before(:all) do
+      #before each test disable the delayed_job asynch call
+      @previous_delay_status = Delayed::Worker.delay_jobs
+      Delayed::Worker.delay_jobs = true
+    end
+
+    after(:all) do
+      #after each test re-enable the delayed_job asynch call
+      Delayed::Worker.delay_jobs = @previous_delay_status
+    end
+      
+    before(:each) do
+      @complete_merchant = _prepare_complete_merchant
+      @complete_merchant.save
+      complete_salesforce_handler = SalesforceUpdateJob.new(@complete_merchant.id).to_yaml
+      @complete_salesforce_delayed_jobs = Delayed::Job.where("handler LIKE ?", complete_salesforce_handler)
+      @incomplete_merchant = _prepare_incomplete_merchant
+      @incomplete_merchant.save      
+      incomplete_salesforce_handler = SalesforceUpdateJob.new(@incomplete_merchant.id).to_yaml
+      @incomplete_salesforce_delayed_jobs = Delayed::Job.where("handler LIKE ?", incomplete_salesforce_handler)
+    end
+    
+    describe "salesforce update" do
+      it "should create salesforce delayed job after save if merchant completed signup" do
+        @complete_salesforce_delayed_jobs.size.should == 1
+      end
+      
+      it "should create a delayed job after save if merchant not completed signup" do
+        @incomplete_salesforce_delayed_jobs.size.should == 1
+      end
+    
+      it "should create a delayed job for the future if not completed" do
+        @incomplete_salesforce_delayed_jobs[0].run_at.should > (Onboarding::Application.config.salesforce_job_delay.to_time - 10)
+      end
+  
+      it "should create a delayed job for now if completed" do
+        @complete_salesforce_delayed_jobs[0].run_at.should < 10.seconds.from_now
+      end
+      
+      it "should remove older delayed jobs for the same complete merchant" do
+        # Take the delayed job that was created by the previous save (in before block)
+        first_job = @complete_salesforce_delayed_jobs[0]
+        # Save same merchant again and check the job does not exist anymore
+        @complete_merchant.save
+        Delayed::Job.all.should_not be_include(first_job)
+      end
+
+      it "should remove older delayed jobs for the same incomplete merchant" do
+        # Take the delayed job that was created by the previous save (in before block)
+        first_job = @incomplete_salesforce_delayed_jobs[0]
+        # Save same merchant again and check the job does not exist anymore
+        @incomplete_merchant.save
+        Delayed::Job.all.should_not be_include(first_job)
+      end
+      
+      it "should not change the number of delayed job for several saves of same incomplete merchant" do
+        lambda do
+          @incomplete_merchant.save
+          @incomplete_merchant.save
+          @incomplete_merchant.save
+        end.should_not change(Delayed::Job, :count)
+      end
+    end
+    
+    describe "confirmation email" do
+      it "should create one delayed job for email if completed" do
+        @expected_handler = Delayed::PerformableMethod.new(@complete_merchant,
+        :send_confirmation_email_without_delay, []).to_yaml
+        one_delayed_job = Delayed::Job.where("handler LIKE ?", @expected_handler)
+        one_delayed_job.size.should == 1
+      end
+      
+      it "should not create delayed job for email if not completed" do
+        @expected_handler = Delayed::PerformableMethod.new(@incomplete_merchant,
+        :send_confirmation_email_without_delay, []).to_yaml
+        no_delayed_job = Delayed::Job.where("handler LIKE ?", @expected_handler)
+        no_delayed_job.should be_empty
+      end
+    end
+  end
+  
+  describe "Salesforce objects creation", :long_test => true do
+    include Databasedotcom::Rails::Controller # unless Rails.env.test?
+    
+    before(:all) do
+      @previous_delay_jobs = Delayed::Worker.delay_jobs
+      Delayed::Worker.delay_jobs = false
+    end
+    
+    after(:all) do
+      Delayed::Worker.delay_jobs = @previous_delay_jobs
+    end
+            
+    describe "incomplete merchant" do
+
+      before(:each) do
+        @incomplete_merchant = _prepare_incomplete_merchant
+      end
+      
+      after(:each) do
+        Lead.query("Organisational_number__c = '#{@incomplete_merchant.organization_number.to_s}' AND Email = '#{@incomplete_merchant.email}'").each do |lead|
+          lead.delete
+        end
+        Account.query("Organisational_number__c = '#{@incomplete_merchant.organization_number.to_s}' AND Website = '#{@incomplete_merchant.website}'").each do |account|
+          account.delete
+        end
+        # By deleting an account - its opportunities / contacts / forecast contributions are deleted
+        # Opportunity.query("Name = 'merchant.com'").each do |oppor|
+        #   oppor.delete
+        # end
+      end
+
+      it "should create a Lead for incomplete merchant" do
+        @incomplete_merchant.save
+        lead = Lead.find_by_Organisational_number__c(@incomplete_merchant.organization_number.to_s)
+        lead.should_not be_nil
+      end
+      
+      it "should add +46 for phone number with no prefix" do
+        @incomplete_merchant.phone = "1234567890"
+        @incomplete_merchant.save
+        lead = Lead.find_by_Phone("+461234567890")
+        lead.Organisational_number__c.should == @incomplete_merchant.organization_number.to_s
+      end
+      
+      it "should not create an Account for incomplete merchant" do
+        @incomplete_merchant.save
+        acc = Account.find_by_Organisational_number__c(@incomplete_merchant.organization_number.to_s)
+        acc.should be_nil
+      end
+      
+      it "should not create an Opportunity for incomplete merchant" do
+        lambda do
+          @incomplete_merchant.save
+        end.should_not change(Opportunity, :count)
+      end
+        
+      it "should not create an Contact for incomplete merchant" do
+        lambda do
+          @incomplete_merchant.save
+        end.should_not change(Contact, :count)
+      end
+      
+      it "should not create a Forecast Contribution for incomplete merchant" do
+        lambda do
+          @incomplete_merchant.save
+        end.should_not change(Forecast_Contribution__c, :count)
+      end
+    end
+    
+    describe "complete merchant" do
+      
+      before(:each) do
+        @complete_merchant = _prepare_complete_merchant
+      end
+      
+      after(:each) do
+        Lead.query("Organisational_number__c = '#{@complete_merchant.organization_number.to_s}' AND Email = '#{@complete_merchant.email}'").each do |lead|
+          lead.delete
+        end
+        Account.query("Organisational_number__c = '#{@complete_merchant.organization_number.to_s}' AND Website = '#{@complete_merchant.website}'").each do |account|
+          account.delete
+        end
+        # By deleting an account - its opportunities / contacts / forecast contributions are deleted
+        # Opportunity.query("Name = 'merchant.com'").each do |oppor|
+        #   oppor.delete
+        # end
+      end
+      
+      it "should create an Account for complete merchant" do
+        lambda do
+          @complete_merchant.save
+        end.should change(Account, :count).by(1)
+      end
+      
+      it "should add +46 for phone number with no prefix" do
+        @complete_merchant.phone = "123456789"
+        @complete_merchant.save
+        account = Account.find_by_Organisational_number__c(@complete_merchant.organization_number.to_s)
+        account.Phone.should == "+46" + @complete_merchant.phone
+        contact = Contact.find_by_AccountId(account.Id)
+        contact.Phone.should == "+46" + @complete_merchant.phone
+      end
+      
+      it "should create an Opportunity for complete merchant" do
+        lambda do
+          @complete_merchant.save
+        end.should change(Opportunity, :count).by(1)
+      end
+      
+      it "should create a Contact for complete merchant" do
+        lambda do
+          @complete_merchant.save
+        end.should change(Contact, :count).by(1)
+      end
+      
+      it "should create a Forecast Contribution for complete merchant" do
+        lambda do
+          @complete_merchant.save
+        end.should change(Forecast_Contribution__c, :count).by(1)
+      end
+
+      it "should associate Forecast Contribution with Opportunity"
+      it "should associate Contact with Account"
+      it "should associate Opportunity with Account"
+      it "should associate Contact with Account"
+                      
+      it "should remove a previously created Lead for complete merchant, when other object successfuly created" do
+        orgnum = @complete_merchant.organization_number
+        @complete_merchant.organization_number = nil
+        @complete_merchant.save
+        @complete_merchant.reload
+        Lead.find_by_Id(@complete_merchant.lead_id).should_not be_nil
+        @complete_merchant.organization_number = orgnum
+        @complete_merchant.save
+        Lead.find_by_Id(@complete_merchant.lead_id).should be_nil
+      end
+      
+      it "should leave Lead when other objects are failed to create"
+      it "should remove all objects (but lead) if one of them has failed to create"
+    end
+  end
+
+  describe "Email creation and send" do
+
+    before(:all) do
+      #before each test disable the delayed_job asynch call
+      @previous_delay_status = Delayed::Worker.delay_jobs
+      Delayed::Worker.delay_jobs = false
+    end
+    
+    after(:all) do
+      #after each test re-enable the delayed_job asynch call
+      Delayed::Worker.delay_jobs = @previous_delay_status
+    end
+    
+    it "should build the correct params for email , and call the URL HTTP request" do  
+      merchant = Merchant.new
+      merchant.email= 'test@klarna.com'
+      merchant.company_name = 'Klarna AB'
+      expected_params = {
+        'triggerid' => '880',
+        'user' => 'Klarna',
+        'pass' => '5U495i5W97p497x875',
+        'customerid' => '2313',
+        'originalid' => merchant.email, 
+        'emailaddress' => merchant.email, 
+        'firstname' => merchant.company_name,
+        'country' => 'se',
+        'prop_18582' => "http://localhost:3000/contracts/original/missing.png"
+      }
+      Net::HTTP.should_receive(:post_form).with(URI.parse('http://www2.carmamail.com/mail/UTF8Trigger'),expected_params).and_return(nil)      
+      merchant.instance_eval{ send_confirmation_email }
+    end    
+  end
+
+  describe "pdf contract" do
+
+    describe "incomplete merchant" do
+      
+      it "should not include a pdf contract" do
+        @incomplete_merchant = _prepare_incomplete_merchant
+        @incomplete_merchant.save        
+        @incomplete_merchant.contract_file_name.should be_nil
+      end
+    end
+    
+    describe "complete merchant" do
+      before(:each) do
+        @complete_merchant = _prepare_complete_merchant
+        @complete_merchant.save
+      end
+      
+      it "should include a pdf file" do
+        @complete_merchant.contract_file_name.should_not be_nil
+      end
+      
+      it "should have the custom name" do
+        @complete_merchant.contract_file_name.should == 'contract.pdf'
+      end
+      
+      it "should have the custom type" do
+        @complete_merchant.contract_content_type.should == 'application/pdf'
+      end
+      
+      it "should updated in the recent time" do
+        @complete_merchant.contract_updated_at.should < 10.seconds.from_now        
+      end
+    end
+  end
+end

@@ -39,9 +39,7 @@ public class Peer
 	 */
 	private int								startRound						= 1;
 	private int								requestTtl;
-	private static Random					rand							= new Random(
-																					System
-																							.currentTimeMillis());
+	private static Random rand = new Random(System.currentTimeMillis());
 
 	//
 	// Pieces
@@ -65,6 +63,11 @@ public class Peer
 	// Download from others
 	//
 	/**
+	 * Download Bandwidth 
+	 */
+	private int downSlotsMu;
+	private int downSlotsSigma;
+	/**
 	 * Max number of downloads to perform at once.
 	 */
 	private int								downSlotsMax;
@@ -86,6 +89,12 @@ public class Peer
 	 * requesters are simply moved to the end after every download.
 	 */
 	private LinkedHashMap<Peer, UpRequest>	upPending						= new LinkedHashMap<Peer, UpRequest>();
+	/**
+	 * Upload Bandwidth 
+	 */
+	private int upSlotsMu;
+	private int upSlotsSigma;
+	
 	/**
 	 * Max number of uploads to serve at once (upload bandwidth).
 	 */
@@ -126,12 +135,18 @@ public class Peer
 	 */
 	private int								completedRound;
 
-	public Peer(int peerSerial, int downSlotsNum, int upSlotsMax,
+	public Peer(int peerSerial, int downSlotsMu, int downSlotsSigma,
+			int upSlotsMu, int upSlotsSigma,
 			int downPendingMax, int knownPeersMax, int requestTtl)
 	{
 		this.serial = peerSerial;
-		this.downSlotsMax = downSlotsNum;
-		this.upSlotsMax = upSlotsMax;
+		this.downSlotsMu = downSlotsMu;
+		this.downSlotsSigma = downSlotsSigma;
+		this.upSlotsMu = upSlotsMu;
+		this.upSlotsSigma = upSlotsSigma;
+		
+		//this.downSlotsMax = downSlotsNum;
+		//this.upSlotsMax = upSlotsMax;
 		this.downPendingMax = downPendingMax;
 		this.knownPeersMax = knownPeersMax;
 		this.requestTtl = requestTtl;
@@ -212,9 +227,11 @@ public class Peer
 		return downSlotsOccupied < downSlotsMax;
 	}
 
-	public void setAsInitialSource(int initialSourceUpSlotsNum)
+	public void setAsInitialSource()//int initialSourceUpSlotsMu,int initialSourceUpSlotsSigma)
 	{
-		upSlotsMax = initialSourceUpSlotsNum;
+		//upSlotsMu = initialSourceUpSlotsMu;
+		//upSlotsSigma = initialSourceUpSlotsSigma;
+		//upSlotsMax = initialSourceUpSlotsNum;
 		// Set to non-zero so it will be considered as seeder
 		completedRound = -1;
 		for (int pieceSerial = 1; pieceSerial <= Main.piecesNum; pieceSerial++)
@@ -1224,5 +1241,11 @@ public class Peer
 	public void setStartRound(int startRound)
 	{
 		this.startRound = startRound;
+	}
+
+	public void resetBandwidths() {
+		downSlotsMax = Gaussian.nextGaussian(downSlotsMu, downSlotsSigma);
+		upSlotsMax = Gaussian.nextGaussian(upSlotsMu, upSlotsSigma);
+		//System.out.println("down " + downSlotsMax + " up " + upSlotsMax);
 	}
 }
